@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+# Derived from original source on Debian forums
+# https://web.archive.org/web/20250129190420/https://forums.debian.net/viewtopic.php?t=136225
+
+# This will be used a few times
+SCRIPT_NAME="misbehaving-usb-suspend-fixer"
+
+# The root directory for system-sleep
+SYSTEMD_SLEEP_DIR="/usr/lib/systemd/system-sleep/"
+
+# The path for the config file containing usb devices
+CONFIG_FILE_PATH="${SYSTEMD_SLEEP_DIR}/${SCRIPT_NAME}.conf"
+
+# Temp file directory for saving usb configuration
+TEMP_USB_CONFIG_DIR="/tmp/${SCRIPT_NAME}"
+
+function GetDate {
+    DATE=$(date '+%Y-%m-%d %H:%M:%S')
+    echo "${DATE}"
+}
+
+function Main {
+    # Check if the config file exists
+    if [[ ! -f "${CONFIG_FILE_PATH}" ]]; then
+        echo "$(GetDate) Config file not found: '${CONFIG_FILE_PATH}'"
+        return 0
+    fi
+
+    # Read in the configuration file
+    local -a USB_DEVICE_LIST
+    readarray -t USB_DEVICE_LIST < "${CONFIG_FILE_PATH}"
+
+    # Create the temp directory if necessary
+    mkdir -p "${TEMP_USB_CONFIG_DIR}"
+
+    # Get the lshw output
+    local lshw_output
+    lshw_output="$(sudo lshw -C input -businfo)"
+
+    local currentdevice
+    for currentdevice in "${USB_DEVICE_LIST[@]}"; do
+        # Find a specific USB device
+        usb=$(echo "${lshw_output}" \
+            | grep -E "${currentdevice}" \
+            | awk '{print $1}' \
+            | cut -d "@" -f2 \
+            | sed 's/\:/-/')
+
+        # If the usb device was found, then save its bus and id to file for later
+        # This is necessary because the bus and id are not necessarily consistent between boots
+        if [[ "${usb}" ]]; then
+            echo "${usb}" > "${TEMP_USB_CONFIG_DIR}/${currentdevice}"
+        fi
+        device="$(cat "${TEMP_USB_CONFIG_DIR}/${currentdevice}")"
+
+        # Print info
+        echo "$(GetDate) Detected usb device '${currentdevice}' as '${device}'"
+
+        case $1 in
+            pre)
+                echo "$(GetDate) Disabling device '${device}' while going to sleep"
+                echo "${device}" | sudo tee /sys/bus/usb/drivers/usb/unbind
+                ;;
+            post)
+                echo "$(GetDate) Enabling device '${device}' after wake"
+                echo "${device}" | sudo tee /sys/bus/usb/drivers/usb/bind
+                ;;
+            *)
+                echo "$(GetDate) No wake/sleep detected, not operating on usb device '${device}'. Is this a test?"
+                ;;
+        esac
+
+    done
+}
+
+Main "$@"
