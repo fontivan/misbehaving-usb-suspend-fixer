@@ -69,8 +69,8 @@ function Main {
                 echo "$(GetDate) No wake/sleep detected, not operating on usb device '${device}'. Is this a test?"
                 ;;
         esac
-
     done
 }
 
 Main "$@"
+exit $?

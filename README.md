@@ -10,7 +10,24 @@ An example configuration is provided in `src/etc/example.conf`.
 
 Create your own configuration file at `/usr/lib/systemd/system-sleep/misbehaving-usb-suspend-fixer.conf` with your problematic devices.
 
-The strings used in the configuration file should be relatively unique and from the output of `lsusb`.
+The strings used in the configuration file should be the descriptions found in the output of `lshw -C input -businfo`.
+
+# identification
+
+Misbehaving usb devices can often be found in `dmesg` output.
+
+For example, my misbehaving device reports errors like these:
+```
+[31116.552164] usb 3-5.1.2.1: PM: dpm_run_callback(): usb_dev_resume returns -107
+[31116.552175] usb 3-5.1.2.1: PM: failed to resume async: error -107
+[31119.401244] usb 3-5.1.2.1: can't set config #1, error -32
+```
+
+And we can correlate this to the device using lshw:
+```
+$> sudo lshw -C input -businfo | grep '3:5.1.2.1'
+usb@3:5.1.2.1     input27         input          Kingston HyperX QuadCast S
+```
 
 # installation
 
