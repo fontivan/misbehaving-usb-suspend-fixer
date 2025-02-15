@@ -29,6 +29,12 @@ shellcheck: $(VENV)
 yamllint: $(VENV)
 	$(BIN)/yamllint .
 
+# Install requires sudo due to the directories involved
+install:
+	sudo cp $(ROOT_DIR)/src/bin/misbehaving-usb-suspend-fixer /usr/lib/systemd/system-sleep/misbehaving-usb-suspend-fixer
+	sudo chmod +x /usr/lib/systemd/system-sleep/misbehaving-usb-suspend-fixer
+	sudo cp $(ROOT_DIR)/src/etc/example.conf /usr/lib/systemd/system-sleep/misbehaving-usb-suspend-fixer.conf
+
 clean:
 	rm -rf $(VENV)
 	find . -type f -name *.pyc -delete

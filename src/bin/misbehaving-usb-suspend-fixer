@@ -1,72 +1,163 @@
 #!/usr/bin/env bash
-# Derived from original source on Debian forums
+
+# MIT License
+#
+# Copyright (c) 2025 Fontivan
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in all
+# copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+
+# Derived from original concepts on Debian forums
 # https://web.archive.org/web/20250129190420/https://forums.debian.net/viewtopic.php?t=136225
 
-# This will be used a few times
-SCRIPT_NAME="misbehaving-usb-suspend-fixer"
+# set -x
 
-# The root directory for system-sleep
-SYSTEMD_SLEEP_DIR="/usr/lib/systemd/system-sleep/"
+set -eou pipefail
 
 # The path for the config file containing usb devices
-CONFIG_FILE_PATH="${SYSTEMD_SLEEP_DIR}/${SCRIPT_NAME}.conf"
+CONFIG_FILE_PATH=${CONFIG_FILE_PATH:-"/usr/lib/systemd/system-sleep/misbehaving-usb-suspend-fixer.conf"}
 
-# Temp file directory for saving usb configuration
-TEMP_USB_CONFIG_DIR="/tmp/${SCRIPT_NAME}"
+# Temporary folder for saving bus-device IDs
+TEMP_DEVICE_DIR="/tmp/usb_devices"
 
+# Function to get the current timestamp for logging
 function GetDate {
     DATE=$(date '+%Y-%m-%d %H:%M:%S')
     echo "${DATE}"
 }
 
+# Function to get the bus and device information for a given vendor:device ID
+function GetUsbDeviceInfo {
+    local vendor_and_device_id
+    vendor_and_device_id="$1"
+
+    # Loop through each device in /sys/bus/usb/devices
+    local device
+    for device in /sys/bus/usb/devices/*; do
+        # Check if the device has a "idVendor" and "idProduct" file
+        if [[ -f "${device}/idVendor" ]] && [[ -f "${device}/idProduct" ]]; then
+            # Read the vendor and product IDs
+            local vendor_id
+            local product_id
+            vendor_id=$(cat "${device}/idVendor")
+            product_id=$(cat "${device}/idProduct")
+
+            # Compare the IDs with the input vendor and device ID
+            if [[ "${vendor_id}" == "${vendor_and_device_id%:*}" ]] && [[ "${product_id}" == "${vendor_and_device_id#*:}" ]]; then
+                # Extract the bus and device from the device path (e.g., 003-014)
+                local bus_device
+                bus_device=$(basename "$device")
+                echo "${bus_device}"
+                return 0
+            fi
+        fi
+    done
+
+    # Return nothing if device not found
+    return 1
+}
+
+# Function to handle the "pre" operation (before going to sleep)
+function PreSuspendDevice {
+    local vendor_and_device_id
+    vendor_and_device_id="$1"
+
+    echo "$(GetDate) Disabling device '${vendor_and_device_id}' while going to sleep"
+
+    local sys_usb_device
+    sys_usb_device=$(GetUsbDeviceInfo "${vendor_and_device_id}")
+
+    if [[ -z "${sys_usb_device}" ]]; then
+        echo "$(GetDate) Failed to get usb unbind path for device '${vendor_and_device_id}'"
+        return 1
+    fi
+
+    echo "$(GetDate) Unbinding device '${sys_usb_device}'"
+
+    # Ensure the temp device folder exists
+    mkdir -p "${TEMP_DEVICE_DIR}"
+
+    # Save the device bus-device info to /tmp
+    echo "${sys_usb_device}" > "${TEMP_DEVICE_DIR}/${vendor_and_device_id}"
+
+    if echo "${sys_usb_device}" | sudo tee "/sys/bus/usb/drivers/usb/unbind" >/dev/null 2>&1; then
+        echo "$(GetDate) Device ${vendor_and_device_id} successfully unbound"
+    else
+        echo "$(GetDate) Unbind failed for device ${vendor_and_device_id}"
+        return 1
+    fi
+}
+
+# Function to handle the "post" operation (after waking up)
+function PostResumeDevice {
+    local vendor_and_device_id
+    vendor_and_device_id="$1"
+
+    echo "$(GetDate) Resuming device '${vendor_and_device_id}'"
+
+    # Try to read the bus-device info from the temp file
+    local sys_usb_device
+    sys_usb_device=$(cat "${TEMP_DEVICE_DIR}/${vendor_and_device_id}" 2>/dev/null)
+
+    if [[ -z "${sys_usb_device}" ]]; then
+        echo "$(GetDate) Failed to find saved device info for '${vendor_and_device_id}'"
+        return 1
+    fi
+
+    # Reattach the device by triggering the "bind" operation
+    echo "$(GetDate) Binding device '${sys_usb_device}'"
+    if echo "${sys_usb_device}" | sudo tee "/sys/bus/usb/drivers/usb/bind" >/dev/null 2>&1; then
+        echo "$(GetDate) Device ${vendor_and_device_id} successfully re-bound"
+    else
+        echo "$(GetDate) Rebind failed for device ${vendor_and_device_id}"
+        return 1
+    fi
+}
+
+# Main function to loop through devices and handle suspend/resume
 function Main {
+    local operation
+    operation=${1:-null}
+
     # Check if the config file exists
     if [[ ! -f "${CONFIG_FILE_PATH}" ]]; then
         echo "$(GetDate) Config file not found: '${CONFIG_FILE_PATH}'"
-        return 0
+        return 1
+    else
+        echo "$(GetDate) Using config file '${CONFIG_FILE_PATH}'"
     fi
 
-    # Read in the configuration file
+    # Read in the configuration file, ignoring full line comments, inline comments, and trimming whitespace
     local -a USB_DEVICE_LIST
-    readarray -t USB_DEVICE_LIST < "${CONFIG_FILE_PATH}"
+    readarray -t USB_DEVICE_LIST < <(sed 's/#.*//' "${CONFIG_FILE_PATH}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | grep -v '^\s*$')
 
-    # Create the temp directory if necessary
-    mkdir -p "${TEMP_USB_CONFIG_DIR}"
-
-    # Get the lshw output
-    local lshw_output
-    lshw_output="$(sudo lshw -C input -businfo)"
-
-    local currentdevice
-    for currentdevice in "${USB_DEVICE_LIST[@]}"; do
-        # Find a specific USB device
-        usb=$(echo "${lshw_output}" \
-            | grep -E "${currentdevice}" \
-            | awk '{print $1}' \
-            | cut -d "@" -f2 \
-            | sed 's/\:/-/')
-
-        # If the usb device was found, then save its bus and id to file for later
-        # This is necessary because the bus and id are not necessarily consistent between boots
-        if [[ "${usb}" ]]; then
-            echo "${usb}" > "${TEMP_USB_CONFIG_DIR}/${currentdevice}"
-        fi
-        device="$(cat "${TEMP_USB_CONFIG_DIR}/${currentdevice}")"
-
-        # Print info
-        echo "$(GetDate) Detected usb device '${currentdevice}' as '${device}'"
-
-        case $1 in
+    # Loop over all the devices found in the config file
+    local current_device
+    for current_device in "${USB_DEVICE_LIST[@]}"; do
+        case ${operation} in
             pre)
-                echo "$(GetDate) Disabling device '${device}' while going to sleep"
-                echo "${device}" | sudo tee /sys/bus/usb/drivers/usb/unbind
+                PreSuspendDevice "${current_device}"
                 ;;
             post)
-                echo "$(GetDate) Enabling device '${device}' after wake"
-                echo "${device}" | sudo tee /sys/bus/usb/drivers/usb/bind
+                PostResumeDevice "${current_device}"
                 ;;
             *)
-                echo "$(GetDate) No wake/sleep detected, not operating on usb device '${device}'. Is this a test?"
+                echo "$(GetDate) No wake/sleep detected, not operating on usb device '${current_device}'. Is this a test?"
                 ;;
         esac
     done
