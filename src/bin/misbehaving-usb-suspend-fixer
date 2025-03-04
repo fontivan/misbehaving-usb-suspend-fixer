@@ -27,7 +27,7 @@
 
 # set -x
 
-set -eou pipefail
+# set -eou pipefail
 
 # The path for the config file containing usb devices
 CONFIG_FILE_PATH=${CONFIG_FILE_PATH:-"/usr/lib/systemd/system-sleep/misbehaving-usb-suspend-fixer.conf"}
