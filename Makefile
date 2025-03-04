@@ -35,6 +35,11 @@ install:
 	sudo chmod +x /usr/lib/systemd/system-sleep/misbehaving-usb-suspend-fixer
 	sudo cp $(ROOT_DIR)/src/etc/example.conf /usr/lib/systemd/system-sleep/misbehaving-usb-suspend-fixer.conf
 
+# Uninstall requires sudo due to the directories involved
+uninstall:
+	sudo rm /usr/lib/systemd/system-sleep/misbehaving-usb-suspend-fixer
+	sudo rm /usr/lib/systemd/system-sleep/misbehaving-usb-suspend-fixer.conf
+
 clean:
 	rm -rf $(VENV)
 	find . -type f -name *.pyc -delete
